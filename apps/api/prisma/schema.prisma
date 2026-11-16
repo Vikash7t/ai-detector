@@ -1,0 +1,184 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// -------------------------------------------------------------
+// Better Auth Core Tables
+// -------------------------------------------------------------
+
+model User {
+  id            String    @id @default(uuid())
+  email         String    @unique
+  name          String?
+  emailVerified Boolean   @default(false)
+  image         String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  sessions      Session[]
+  accounts      Account[]
+  scans         Scan[]
+  usages        UserUsage[]
+  reservations  ScanReservation[]
+}
+
+model Session {
+  id        String   @id @default(uuid())
+  userId    String
+  token     String   @unique
+  expiresAt DateTime
+  ipAddress String?
+  userAgent String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Account {
+  id         String   @id @default(uuid())
+  userId     String
+  accountId  String
+  providerId String
+  password   String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([providerId, accountId])
+}
+
+model Verification {
+  id         String   @id @default(uuid())
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+// -------------------------------------------------------------
+// Application Quota & Operational Throttling
+// -------------------------------------------------------------
+
+model UserUsage {
+  id                 String   @id @default(uuid())
+  userId             String
+  periodKey          String   // Format: YYYY-MM (e.g. 2026-11)
+  charactersUsed     Int      @default(0)
+  charactersReserved Int      @default(0)
+  updatedAt          DateTime @updatedAt
+
+  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, periodKey])
+}
+
+model GuestRateLimit {
+  ipHash             String
+  keyVersion         String   @default("v1")
+  date               DateTime @db.Date
+  scanCount          Int      @default(1)
+  charactersAnalyzed Int      @default(0)
+  updatedAt          DateTime @updatedAt
+
+  @@id([ipHash, date])
+}
+
+model GlobalOperationalMetrics {
+  date                       DateTime @id @db.Date
+  guestCharactersTotal       Int      @default(0)
+  registeredCharactersTotal  Int      @default(0)
+  updatedAt                  DateTime @updatedAt
+}
+
+// -------------------------------------------------------------
+// Core Scan Domain (Registered Users Only)
+// -------------------------------------------------------------
+
+model Scan {
+  id             String    @id @default(uuid())
+  userId         String
+  idempotencyKey String?
+  payloadHash    String    // SHA-256 of submitted text
+  submittedText  String    @db.Text
+  wordCount      Int
+  characterCount Int
+  status         String    // PENDING | COMPLETED | FAILED
+  errorCode      String?
+  createdAt      DateTime  @default(now())
+  completedAt    DateTime?
+
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  result         ScanResult?
+  sentences      SentenceScore[]
+  attempts       ScanProviderAttempt[]
+  reservation    ScanReservation?
+
+  @@unique([userId, idempotencyKey])
+  @@index([userId, createdAt(sort: Desc)])
+}
+
+model ScanReservation {
+  id                 String   @id @default(uuid())
+  scanId             String   @unique
+  userId             String
+  periodKey          String   // Pinned YYYY-MM
+  charactersReserved Int
+  status             String   // RESERVED | COMMITTED | RELEASED
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  scan               Scan     @relation(fields: [scanId], references: [id], onDelete: Cascade)
+  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([status, createdAt])
+}
+
+model ScanResult {
+  id              String   @id @default(uuid())
+  scanId          String   @unique
+  providerScore   Float    // 0.0 to 1.0
+  aiFraction      Float    // 0.0 to 1.0
+  providerVerdict String   // Raw verdict from provider
+  latencyMs       Int
+  rawResponse     Json     // Scores & sentences only
+  createdAt       DateTime @default(now())
+
+  scan            Scan     @relation(fields: [scanId], references: [id], onDelete: Cascade)
+}
+
+model SentenceScore {
+  id            String @id @default(uuid())
+  scanId        String
+  sentenceOrder Int
+  charStart     Int    // Unicode code point index (inclusive)
+  charEnd       Int    // Unicode code point index (exclusive)
+  sentenceText  String @db.Text
+  score         Float  // 0.0 to 1.0
+
+  scan          Scan   @relation(fields: [scanId], references: [id], onDelete: Cascade)
+
+  @@index([scanId, sentenceOrder])
+}
+
+model ScanProviderAttempt {
+  id            String   @id @default(uuid())
+  scanId        String
+  provider      String   @default("SAPLING")
+  attemptNumber Int
+  httpStatus    Int?
+  latencyMs     Int
+  errorCode     String?
+  createdAt     DateTime @default(now())
+
+  scan          Scan     @relation(fields: [scanId], references: [id], onDelete: Cascade)
+
+  @@index([scanId])
+}
