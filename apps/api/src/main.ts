@@ -4,11 +4,11 @@ import { ValidationPipe } from '@nestjs/common';
 import * as express from 'express';
 import { AppModule } from './app.module';
 import { EXACT_TRUSTED_PROXY_CIDRS } from './config/trusted-proxies.config';
+import { CorrelationMiddleware } from './common/middleware/correlation.middleware';
+import { RequestLoggerMiddleware } from './common/middleware/request-logger.middleware';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
-    // Better Auth requires raw body access for certain webhooks/endpoints,
-    // so we handle express body parsers cleanly with limits.
     bodyParser: true,
   });
 
@@ -18,11 +18,19 @@ async function bootstrap() {
     : EXACT_TRUSTED_PROXY_CIDRS;
   app.set('trust proxy', trustedProxies);
 
-  // 2. Transport Body Limits (Hard limit 100 KB)
+  // 2. Correlation ID & Structured Request Logger Middleware
+  const correlationMiddleware = new CorrelationMiddleware();
+  const requestLoggerMiddleware = new RequestLoggerMiddleware();
+  app.use(
+    correlationMiddleware.use.bind(correlationMiddleware),
+    requestLoggerMiddleware.use.bind(requestLoggerMiddleware),
+  );
+
+  // 3. Transport Body Limits (Hard limit 100 KB)
   app.use(express.json({ limit: '100kb' }));
   app.use(express.urlencoded({ limit: '100kb', extended: true }));
 
-  // 3. CORS & Cookie Credentials
+  // 4. CORS, Exposed Headers & Cookie Credentials
   const frontendUrl = process.env.BETTER_AUTH_URL || 'http://localhost:3000';
   app.enableCors({
     origin: [frontendUrl, 'http://localhost:3000'],
@@ -34,10 +42,12 @@ async function bootstrap() {
       'X-Requested-With',
       'X-Client-Platform',
       'Idempotency-Key',
+      'X-Correlation-ID',
     ],
+    exposedHeaders: ['X-Correlation-ID'],
   });
 
-  // 4. Global Input Validation
+  // 5. Global Input Validation
   app.useGlobalPipes(
     new ValidationPipe({
       transform: true,
