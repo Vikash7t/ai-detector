@@ -1,0 +1,7 @@
+[build]
+  command = "pnpm --filter @ai-detector/shared-types run build && pnpm --filter web run build"
+  publish = "apps/web/.next"
+
+[build.environment]
+  NODE_VERSION = "22"
+  PNPM_FLAGS = "--no-frozen-lockfile"
